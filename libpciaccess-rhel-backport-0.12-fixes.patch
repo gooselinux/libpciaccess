@@ -1,0 +1,93 @@
+Alan Coopersmith (1):
+      Delay allocation of agp_info so we don't leak it on prior errors
+
+Dave Airlie (1):
+      pciaccess: fix use after free.
+
+Thomas Hellstrom (1):
+      Fix long standing MTRR bug.
+
+Tiago Vignatti (2):
+      vgaarb: decode should send new information to the kernel
+      vgaarb: read back vga count when setting new decoding
+
+diff --git a/src/common_capability.c b/src/common_capability.c
+index 31d59eb..3963db1 100644
+--- a/src/common_capability.c
++++ b/src/common_capability.c
+@@ -104,16 +104,11 @@ pci_fill_capabilities_generic( struct pci_device * dev )
+ 	
+ 	switch ( cap_id ) {
+ 	case 2: {
+-	    struct pci_agp_info * agp_info = calloc( 1, sizeof( struct pci_agp_info ) );
++	    struct pci_agp_info * agp_info;
+ 	    uint32_t agp_status;
+ 	    uint8_t agp_ver;
+ 
+ 
+-	    if ( agp_info == NULL ) {
+-		return ENOMEM;
+-	    }
+-
+-
+ 	    err = pci_device_cfg_read_u8( dev, & agp_ver, cap_offset + 2 );
+ 	    if ( err ) {
+ 		return err;
+@@ -124,6 +119,11 @@ pci_fill_capabilities_generic( struct pci_device * dev )
+ 		return err;
+ 	    }
+ 
++	    agp_info = calloc( 1, sizeof( struct pci_agp_info ) );
++	    if ( agp_info == NULL ) {
++		return ENOMEM;
++	    }
++
+ 	    agp_info->config_offset = cap_offset;
+ 
+ 	    agp_info->major_version = (agp_ver & 0x0f0) >> 4;
+diff --git a/src/common_interface.c b/src/common_interface.c
+index d46feab..4af772a 100644
+--- a/src/common_interface.c
++++ b/src/common_interface.c
+@@ -317,8 +317,8 @@ pci_device_map_range(struct pci_device *dev, pciaddr_t base,
+         *addr =  mappings[devp->num_mappings].memory;
+         devp->num_mappings++;
+     } else {
+-        mappings = realloc(devp->mappings,
+-                           (sizeof(devp->mappings[0]) * devp->num_mappings));
++        mappings = realloc(mappings,
++                           (sizeof(mappings[0]) * devp->num_mappings));
+     }
+ 
+     devp->mappings = mappings;
+diff --git a/src/common_vgaarb.c b/src/common_vgaarb.c
+index a96aedf..86eceb5 100644
+--- a/src/common_vgaarb.c
++++ b/src/common_vgaarb.c
+@@ -33,6 +33,7 @@
+ #include <stdlib.h>
+ #include <limits.h>
+ 
++#include "config.h"
+ #include "pciaccess.h"
+ #include "pciaccess_private.h"
+ 
+@@ -259,10 +260,17 @@ pci_device_vgaarb_decodes(int new_vgaarb_rsrc)
+     if (dev->vgaarb_rsrc == new_vgaarb_rsrc)
+         return 0;
+ 
+-    len = snprintf(buf, BUFSIZE, "decodes %s", rsrc_to_str(dev->vgaarb_rsrc));
++    len = snprintf(buf, BUFSIZE, "decodes %s", rsrc_to_str(new_vgaarb_rsrc));
+     ret = vgaarb_write(pci_sys->vgaarb_fd, buf, len);
+     if (ret == 0)
+         dev->vgaarb_rsrc = new_vgaarb_rsrc;
++
++    ret = read(pci_sys->vgaarb_fd, buf, BUFSIZE);
++    if (ret <= 0)
++        return -1;
++
++    parse_string_to_decodes_rsrc(buf, &pci_sys->vga_count, NULL);
++
+     return ret;
+ }
+ 

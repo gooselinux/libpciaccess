@@ -1,0 +1,143 @@
+diff -up libpciaccess-0.10.9/src/linux_sysfs.c.da libpciaccess-0.10.9/src/linux_sysfs.c
+--- libpciaccess-0.10.9/src/linux_sysfs.c.da	2009-09-24 10:06:55.000000000 +1000
++++ libpciaccess-0.10.9/src/linux_sysfs.c	2009-09-25 11:51:21.000000000 +1000
+@@ -57,6 +57,8 @@
+ 
+ static void pci_device_linux_sysfs_enable(struct pci_device *dev);
+ 
++static void pci_device_linux_sysfs_destroy( void );
++
+ static int pci_device_linux_sysfs_read_rom( struct pci_device * dev,
+     void * buffer );
+ 
+@@ -79,7 +81,7 @@ static int pci_device_linux_sysfs_boot_v
+ static int pci_device_linux_sysfs_has_kernel_driver(struct pci_device *dev);
+ 
+ static const struct pci_system_methods linux_sysfs_methods = {
+-    .destroy = NULL,
++    .destroy = pci_device_linux_sysfs_destroy,
+     .destroy_device = NULL,
+     .read_rom = pci_device_linux_sysfs_read_rom,
+     .probe = pci_device_linux_sysfs_probe,
+@@ -382,6 +384,53 @@ pci_device_linux_sysfs_read_rom( struct 
+     return err;
+ }
+ 
++static struct pci_device *last_config_dev = NULL;
++static int config_fd = -1;
++
++static void
++pci_device_linux_sysfs_destroy( void )
++{
++    if (config_fd != -1)
++	close( config_fd );
++}
++
++static int
++open_config_fd( struct pci_device * dev, int flags )
++{
++    int fd;
++    char name[256];
++
++    /* Each device has a directory under sysfs.  Within that directory there
++     * is a file named "config".  This file used to access the PCI config
++     * space.  It is used here to obtain most of the information about the
++     * device.
++     */
++
++    if ( last_config_dev != dev ) {
++	if ( config_fd != -1 ) {
++	    close( config_fd );
++	    last_config_dev = NULL;
++	}
++
++	snprintf( name, 255, "%s/%04x:%02x:%02x.%1u/config",
++		  SYS_BUS_PCI,
++	          dev->domain,
++	          dev->bus,
++	          dev->dev,
++	          dev->func );
++
++	fd = open( name, flags );
++	if ( fd == -1 ) {
++	    return -1;
++	}
++	config_fd = fd;
++	last_config_dev = dev;
++    } else {
++	fd = config_fd;
++    }
++
++    return fd;
++}
+ 
+ static int
+ pci_device_linux_sysfs_read( struct pci_device * dev, void * data,
+@@ -398,23 +447,9 @@ pci_device_linux_sysfs_read( struct pci_
+ 	*bytes_read = 0;
+     }
+ 
+-    /* Each device has a directory under sysfs.  Within that directory there
+-     * is a file named "config".  This file used to access the PCI config
+-     * space.  It is used here to obtain most of the information about the
+-     * device.
+-     */
+-    snprintf( name, 255, "%s/%04x:%02x:%02x.%1u/config",
+-	      SYS_BUS_PCI,
+-	      dev->domain,
+-	      dev->bus,
+-	      dev->dev,
+-	      dev->func );
+-
+-    fd = open( name, O_RDONLY );
+-    if ( fd == -1 ) {
++    fd = open_config_fd( dev, O_RDWR );
++    if ( fd == -1 )
+ 	return errno;
+-    }
+-
+ 
+     while ( temp_size > 0 ) {
+ 	const ssize_t bytes = pread64( fd, data_bytes, temp_size, offset );
+@@ -436,7 +471,6 @@ pci_device_linux_sysfs_read( struct pci_
+ 	*bytes_read = size - temp_size;
+     }
+ 
+-    close( fd );
+     return err;
+ }
+ 
+@@ -456,23 +490,9 @@ pci_device_linux_sysfs_write( struct pci
+ 	*bytes_written = 0;
+     }
+ 
+-    /* Each device has a directory under sysfs.  Within that directory there
+-     * is a file named "config".  This file used to access the PCI config
+-     * space.  It is used here to obtain most of the information about the
+-     * device.
+-     */
+-    snprintf( name, 255, "%s/%04x:%02x:%02x.%1u/config",
+-	      SYS_BUS_PCI,
+-	      dev->domain,
+-	      dev->bus,
+-	      dev->dev,
+-	      dev->func );
+-
+-    fd = open( name, O_WRONLY );
+-    if ( fd == -1 ) {
++    fd = open_config_fd( dev, O_RDWR );
++    if ( fd == -1 )
+ 	return errno;
+-    }
+-
+ 
+     while ( temp_size > 0 ) {
+ 	const ssize_t bytes = pwrite64( fd, data_bytes, temp_size, offset );
+@@ -494,7 +514,6 @@ pci_device_linux_sysfs_write( struct pci
+ 	*bytes_written = size - temp_size;
+     }
+ 
+-    close( fd );
+     return err;
+ }
+ 
